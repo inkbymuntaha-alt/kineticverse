@@ -47,13 +47,9 @@
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      background: rgba(5, 5, 10, 0.85);
+      background: rgba(5, 5, 10, 0.9);
       backdrop-filter: blur(8px);
-      transition: opacity 0.5s ease;
-    }
-    #ui-overlay.hidden {
-      opacity: 0;
-      pointer-events: none;
+      transition: opacity 0.3s ease;
     }
     .title {
       color: #fff;
@@ -78,19 +74,19 @@
       color: #000;
       font-weight: bold;
       border: none;
-      padding: 14px 28px;
-      font-size: 14px;
+      padding: 16px 32px;
+      font-size: 15px;
       border-radius: 30px;
       letter-spacing: 1px;
       cursor: pointer;
-      box-shadow: 0 4px 15px rgba(0, 255, 204, 0.4);
+      box-shadow: 0 4px 20px rgba(0, 255, 204, 0.4);
     }
     #debug-console {
       position: fixed;
       bottom: 0;
       left: 0;
       width: 100%;
-      max-height: 35vh;
+      max-height: 30vh;
       background: rgba(0, 0, 0, 0.85);
       color: #00ffcc;
       font-family: monospace;
@@ -155,75 +151,64 @@
 
     console.log("App ready. Tap initialize button.");
 
-    // --- 2. GLOBAL STATE & WEB AUDIO SYNTHESIZER ---
-    let audioCtx = null;
-    let scene, camera, renderer, particleMesh;
-    let velocities = [], positions = [];
-    let motionX = 0, motionY = 0;
+    let audioCtx = null, scene, camera, renderer, particleMesh;
+    let velocities = [], motionX = 0, motionY = 0;
     const count = 500;
 
     function initAudio() {
       try {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
-        audioCtx = new AudioContext();
-        console.log("AudioContext state:", audioCtx.state);
+        if (AudioContext) {
+          audioCtx = new AudioContext();
+          if (audioCtx.state === 'suspended') audioCtx.resume();
+          console.log("AudioContext initialized.");
+        }
       } catch(e) {
-        console.error("Web Audio API not supported on this browser:", e);
+        console.warn("Web Audio fallback:", e.message);
       }
     }
 
     function playSynthTone(freq) {
       if (!audioCtx || audioCtx.state !== 'running') return;
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = 'sine';
-      osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-      gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.3);
+      try {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.05, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.3);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.3);
+      } catch(e) {}
     }
 
-    // --- 3. CAMERA PASS-THROUGH SETUP ---
-    async function initCamera() {
+    function initCameraNonBlocking() {
       const video = document.getElementById('camera-video');
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        console.error("getUserMedia API is not supported on this browser.");
+        console.warn("Camera API missing or blocked.");
         return;
       }
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" } },
-          audio: false
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false })
+        .then(stream => {
+          video.srcObject = stream;
+          video.play().catch(e => console.warn("Video play warning:", e.message));
+          console.log("Camera pass-through active!");
+        })
+        .catch(err => {
+          console.warn("Camera bypassed or denied:", err.message);
         });
-        video.srcObject = stream;
-        await video.play();
-        console.log("Camera pass-through active.");
-      } catch (err) {
-        console.error("Camera access error:", err.name, err.message);
-      }
     }
 
-    // --- 4. DEVICE MOTION & ORIENTATION ---
     function initSensors() {
       if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-        // iOS 13+ permission request
         DeviceMotionEvent.requestPermission().then(state => {
-          if (state === 'granted') {
-            window.addEventListener('devicemotion', handleMotion);
-            console.log("Motion sensor granted.");
-          } else {
-            console.warn("Motion sensor access denied.");
-          }
-        }).catch(console.error);
+          if (state === 'granted') window.addEventListener('devicemotion', handleMotion);
+        }).catch(e => console.warn("Motion permission warning:", e.message));
       } else if ('DeviceMotionEvent' in window) {
-        // Android and standard desktop browsers
         window.addEventListener('devicemotion', handleMotion);
-        console.log("Listening to DeviceMotion events.");
-      } else {
-        console.warn("DeviceMotion API not available on this device.");
+        console.log("Listening to Motion events.");
       }
     }
 
@@ -234,9 +219,10 @@
       }
     }
 
-    // --- 5. THREE.JS SCENE SETUP ---
     function initThreeJS() {
       const container = document.getElementById('canvas-container');
+      if (!container) return;
+      
       scene = new THREE.Scene();
       camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
       camera.position.z = 15;
@@ -246,7 +232,6 @@
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       container.appendChild(renderer.domElement);
 
-      // Create interactive particle field
       const geometry = new THREE.BufferGeometry();
       const posArray = new Float32Array(count * 3);
 
@@ -263,7 +248,6 @@
       }
 
       geometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
-
       const material = new THREE.PointsMaterial({
         size: 0.35,
         color: 0x00ffcc,
@@ -275,67 +259,54 @@
       particleMesh = new THREE.Points(geometry, material);
       scene.add(particleMesh);
 
-      // Handle screen resize
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
       });
 
-      // Touch interaction trigger
-      window.addEventListener('touchstart', () => {
-        playSynthTone(440 + Math.random() * 220);
-      });
-
+      window.addEventListener('touchstart', () => playSynthTone(440 + Math.random() * 220));
       animate();
-      console.log("Three.js WebGL scene created.");
+      console.log("3D WebGL Canvas rendered successfully.");
     }
 
     function animate() {
       requestAnimationFrame(animate);
-
       if (particleMesh) {
         const positionsArr = particleMesh.geometry.attributes.position.array;
-
         for (let i = 0; i < count; i++) {
           const idx = i * 3;
-
-          // Apply sensor velocity
           positionsArr[idx] += velocities[i].x + motionX * 0.02;
           positionsArr[idx + 1] += velocities[i].y - motionY * 0.02;
           positionsArr[idx + 2] += velocities[i].z;
 
-          // Screen boundaries reflection
           if (Math.abs(positionsArr[idx]) > 10) velocities[i].x *= -1;
           if (Math.abs(positionsArr[idx + 1]) > 10) velocities[i].y *= -1;
           if (Math.abs(positionsArr[idx + 2]) > 5) velocities[i].z *= -1;
         }
-
         particleMesh.geometry.attributes.position.needsUpdate = true;
         particleMesh.rotation.y += 0.002;
       }
-
       renderer.render(scene, camera);
     }
 
-    // --- 6. INITIALIZATION EVENT TRIGGER ---
-    document.getElementById('start-btn').addEventListener('click', async () => {
-      console.log("Initializing experience...");
+    // DIRECT TOUCH & CLICK HANDLER
+    const startBtn = document.getElementById('start-btn');
+    function startApp(e) {
+      if (e) e.preventDefault();
+      console.log("Touch/Click registered! Starting app...");
       
-      initAudio();
-      if (audioCtx && audioCtx.state === 'suspended') {
-        await audioCtx.resume();
-      }
-
-      await initCamera();
-      initSensors();
-      initThreeJS();
-
-      // Hide overlay
       const overlay = document.getElementById('ui-overlay');
-      overlay.classList.add('hidden');
-      console.log("KineticVerse active!");
-    });
+      if (overlay) overlay.style.display = 'none';
+
+      initAudio();
+      initThreeJS();
+      initSensors();
+      initCameraNonBlocking();
+    }
+
+    startBtn.addEventListener('click', startApp);
+    startBtn.addEventListener('touchstart', startApp);
   </script>
 </body>
 </html>
